@@ -89,11 +89,22 @@ def _LoadModel(gd_file, ckpt_file):
 
     tf.logging.info('Recovering Graph %s', gd_file)
     t = {}
+    cnn_vars = (
+      ['char_embedding/cnn_{}/kernel:0'.format(i) for i in range(8)] +
+      ['char_embedding/cnn_{}/b:0'.format(i) for i in range(8)]
+    )
     [t['states_init'], t['lstm/lstm_0/control_dependency'],
      t['lstm/lstm_1/control_dependency'], t['softmax_out'], t['class_ids_out'],
      t['class_weights_out'], t['log_perplexity_out'], t['inputs_in'],
      t['targets_in'], t['target_weights_in'], t['char_inputs_in'],
-     t['all_embs'], t['softmax_weights'], t['global_step']
+     t['all_embs'], t['softmax_weights'], t['global_step'],
+     
+     t['char_embedding'],
+     t['cnn_0_kernel'], t['cnn_1_kernel'], t['cnn_2_kernel'], t['cnn_3_kernel'],
+        t['cnn_4_kernel'], t['cnn_5_kernel'], t['cnn_6_kernel'], t['cnn_7_kernel'],
+     t['cnn_0_b'], t['cnn_1_b'], t['cnn_2_b'], t['cnn_3_b'],
+        t['cnn_4_b'], t['cnn_5_b'], t['cnn_6_b'], t['cnn_7_b'],
+
     ] = tf.import_graph_def(gd, {}, ['states_init',
                                      'lstm/lstm_0/control_dependency:0',
                                      'lstm/lstm_1/control_dependency:0',
@@ -107,7 +118,13 @@ def _LoadModel(gd_file, ckpt_file):
                                      'char_inputs_in:0',
                                      'all_embs_out:0',
                                      'Reshape_3:0',
-                                     'global_step:0'], name='')
+                                     'global_step:0',
+
+                                    'char_embedding/W:0',
+                                    
+                                    #'char_embedding/cnn_0/kernel:0',
+                                    #'char_embedding/cnn_0/b:0',
+																] + cnn_vars                                                                     , name='')
 
     sys.stderr.write('Recovering checkpoint %s\n' % ckpt_file)
     sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True))
@@ -209,6 +226,41 @@ def _SampleModel(prefix_words, vocab):
           len(sent) > FLAGS.max_sample_words):
         break
 
+def _DumpCharEmbedding(vocab):
+  assert FLAGS.save_dir, 'Must specify FLAGS.save_dir for dump_emb.'
+  sess, t  = _LoadModel(FLAGS.pbtxt, FLAGS.ckpt)
+  emb = sess.run(t['char_embedding'])
+  fname = FLAGS.save_dir + '/char_embeddings.npy'
+  with tf.gfile.Open(fname, mode='w') as f:
+    np.save(f, emb)
+
+  # While we're here, let's also dump the cnn filters!
+  for filter_id in range(7):
+    filter_width = filter_id+1
+    print "Dumping kernel with width={}".format(filter_width)
+    emb_kernel = sess.run(t['cnn_{}_kernel'.format(filter_id)])
+    bias = sess.run(t['cnn_{}_b'.format(filter_id)])
+    # Width 7 is a special case, because it's spread over 2 variables.
+    # because of reasons?
+    if filter_id == 6:
+      emb_kernel2 = sess.run(t['cnn_7_kernel'])
+      bias2 = sess.run(t['cnn_7_b'])
+      # (7,16,1,1024) + (7,16,1,2048)
+      emb_kernel = np.concatenate( (emb_kernel, emb_kernel2), 3)
+      bias = np.concatenate( (bias, bias2), 3)
+
+    # Want to transform each kernel from 16 x w to 256 x w (i.e. bypass char embs)
+    # emb_kernel shape is (width, 16, 1, n_filters). Get rid of the dummy dimen.
+    emb_kernel = np.reshape(emb_kernel, (filter_width, 16, -1))
+    kernel = np.dot(emb, emb_kernel)
+    # Shape of final kernel: 256 x width x n_filters
+    fname_kernel = FLAGS.save_dir + '/filters/kernel{}.npy'.format(filter_width)
+    with tf.gfile.Open(fname_kernel, mode='w') as f:
+      np.save(f, kernel)
+    fname_bias = FLAGS.save_dir + '/filters/b{}.npy'.format(filter_width)
+    with tf.gfile.Open(fname_bias, mode='w') as f:
+      np.save(f, bias)
+
 
 def _DumpEmb(vocab):
   """Dump the softmax weights and word embeddings to files.
@@ -299,6 +351,8 @@ def main(unused_argv):
     _DumpEmb(vocab)
   elif FLAGS.mode == 'dump_lstm_emb':
     _DumpSentenceEmbedding(FLAGS.sentence, vocab)
+  elif FLAGS.mode == 'dump_char_emb':
+    _DumpCharEmbedding(vocab)
   else:
     raise Exception('Mode not supported.')
 

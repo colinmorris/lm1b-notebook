@@ -19,6 +19,7 @@ import random
 
 import numpy as np
 import tensorflow as tf
+import json
 
 
 class Vocabulary(object):
@@ -115,6 +116,16 @@ class CharsVocabulary(Vocabulary):
     self.bow_char = free_ids[2]  # <begin word>
     self.eow_char = free_ids[3]  # <end word>
     self.pad_char = free_ids[4]  # <padding>
+
+    self.free_ids = [ord(c) for c in free_ids[5:]]
+    #print "{} free ids".format(len(self.free_ids))
+    #print self.free_ids
+    f = open('char_vocab.json', 'w')
+    json.dump(
+	    {'bos': ord(self.bos_char), 'eos': ord(self.eos_char), 'bow': ord(self.bow_char),
+		    'eow': ord(self.eow_char), 'pad': ord(self.pad_char),
+		    'free_ids': self.free_ids},
+	    f)
 
     chars_set |= {self.bos_char, self.eos_char, self.bow_char, self.eow_char,
                   self.pad_char}
