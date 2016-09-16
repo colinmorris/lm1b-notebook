@@ -4,6 +4,15 @@ import numpy as np
 
 META_CHAR_KEYS = ['bos', 'bow', 'eos', 'eow', 'pad']
 
+# These are non alpha-numeric characters that appear somewhat frequently in
+# the provided test set - ocurring in at least around 1% of sentences. The 
+# threshold was basically set by the least frequent alphanumeric character
+# ('X' with 37 occs in 6k sentences)
+COMMON_SPECIAL_CHARS = '.,-\'")(:$?/;&%!'\
+  + ''.join(chr(i) for i in [194, 163, 195])
+# (163 and 194 seem to be used a lot for the gbp symbol. 
+# 195 is used for a lot of diacritics.)
+
 # Originally had entries for whitespace, but doesn't seem to 
 # exist. In fact, the 'other' bucket shouldn't be used either
 # i.e. there are no used ascii chars that aren't alphanum or punct
@@ -53,10 +62,13 @@ def charify(cp):
   for key in META_CHAR_KEYS:
     if cp == vocab[key]:
       return '<{}>'.format(key.upper())
-  assert cp not in vocab['free_ids']
-  if cp >= 128:
+  #assert cp not in vocab['free_ids']
+  char = chr(cp)
+  if cp >= 128 or char not in string.printable:
     return '\\' + str(cp)
-  return chr(cp)
+  if char.isspace():
+    return '<WS>'
+  return char
 
 with open('../char_vocab.json') as f:
   vocab = json.load(f)
