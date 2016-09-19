@@ -2,14 +2,21 @@ import string
 import json
 import numpy as np
 
+with open('../char_vocab.json') as f:
+  vocab = json.load(f)
+
 META_CHAR_KEYS = ['bos', 'bow', 'eos', 'eow', 'pad']
+
+def get_vocab():
+  return vocab
 
 # These are non alpha-numeric characters that appear somewhat frequently in
 # the provided test set - ocurring in at least around 1% of sentences. The 
 # threshold was basically set by the least frequent alphanumeric character
 # ('X' with 37 occs in 6k sentences)
 COMMON_SPECIAL_CHARS = '.,-\'")(:$?/;&%!'\
-  + ''.join(chr(i) for i in [194, 163, 195])
+  + ''.join(chr(i) for i in [194, 163, 195])\
+  + ''.join(chr(vocab[k]) for k in META_CHAR_KEYS)
 # (163 and 194 seem to be used a lot for the gbp symbol. 
 # 195 is used for a lot of diacritics.)
 
@@ -26,6 +33,11 @@ COLOR_KEY = {
   'meta': 'salmon',
   'other': 'red',
 }
+
+def is_frequent(c):
+  if isinstance(c, int):
+    c = chr(c)
+  return c.isalnum() or c in COMMON_SPECIAL_CHARS
 
 def get_embedding():
   return np.load('char_embeddings.npy')
@@ -58,6 +70,8 @@ def char_type(c):
   return t
 
 def charify(cp):
+  if isinstance(cp, basestring):
+    cp = ord(cp)
   global vocab
   for key in META_CHAR_KEYS:
     if cp == vocab[key]:
@@ -70,5 +84,3 @@ def charify(cp):
     return '<WS>'
   return char
 
-with open('../char_vocab.json') as f:
-  vocab = json.load(f)

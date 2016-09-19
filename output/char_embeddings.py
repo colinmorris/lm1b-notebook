@@ -4,24 +4,26 @@ import string
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import sklearn.decomposition
-from common import char_type, char_color, charify, COLOR_KEY
+from common import char_type, char_color, charify, COLOR_KEY, is_frequent
 
 COLORIZE = True
 
-CONNECT_ALPHAS = 1
+CONNECT_ALPHAS = 0
 
 #MODE = 'PCA'
 MODE = 'SNE'
 
-ALLOWED_TYPES = [
-  #'non-ascii',
+ALLOW_RARE = 0
 
-  #'digit',
+ALLOWED_TYPES = [
+  'non-ascii',
+
+  'digit',
   'uppercase',
   'lowercase',
-  #'punctuation',
-  #'meta',
-  #'other',
+  'punctuation',
+  'meta',
+  'other',
 ]
 
 # Include hidden types in projection calculations, but just hide them in the
@@ -34,7 +36,8 @@ charpoints = [
   i for i in range(256) 
   if 
     (HIDE_OTHER_TYPES or char_type(i) in ALLOWED_TYPES)
-    and (char_type(i) not in ['non-ascii', 'unused']) # hacky
+    #and (char_type(i) not in ['non-ascii', 'unused']) # hacky
+    and (ALLOW_RARE or is_frequent(i))
 ]
 
 if MODE == 'SNE':

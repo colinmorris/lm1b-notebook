@@ -24,6 +24,8 @@ import tensorflow as tf
 from google.protobuf import text_format
 import data_utils
 
+WORD_DUMP_LIMIT = 5000
+
 FLAGS = tf.flags.FLAGS
 # General flags.
 tf.flags.DEFINE_string('mode', 'eval',
@@ -274,6 +276,13 @@ def _DumpEmb(vocab):
   weights = np.ones([BATCH_SIZE, NUM_TIMESTEPS], np.float32)
 
   sess, t = _LoadModel(FLAGS.pbtxt, FLAGS.ckpt)
+  
+  # Doing this for all words is hellllla slow. Like over a day.
+  if WORD_DUMP_LIMIT != -1:
+    wordlimit = WORD_DUMP_LIMIT
+  else:
+    wordlimit = vocab.size
+  print wordlimit
 
   softmax_weights = sess.run(t['softmax_weights'])
   fname = FLAGS.save_dir + '/embeddings_softmax.npy'
@@ -281,8 +290,8 @@ def _DumpEmb(vocab):
     np.save(f, softmax_weights)
   sys.stderr.write('Finished softmax weights\n')
 
-  all_embs = np.zeros([vocab.size, 1024])
-  for i in range(vocab.size):
+  all_embs = np.zeros([wordlimit, 1024])
+  for i in range(wordlimit):
     input_dict = {t['inputs_in']: inputs,
                   t['targets_in']: targets,
                   t['target_weights_in']: weights}
@@ -291,7 +300,7 @@ def _DumpEmb(vocab):
           vocab.word_char_ids[i].reshape([-1, 1, MAX_WORD_LEN]))
     embs = sess.run(t['all_embs'], input_dict)
     all_embs[i, :] = embs
-    sys.stderr.write('Finished word embedding %d/%d\n' % (i, vocab.size))
+    sys.stderr.write('Finished word embedding %d/%d\n' % (i, wordlimit))
 
   fname = FLAGS.save_dir + '/embeddings_char_cnn.npy'
   with tf.gfile.Open(fname, mode='w') as f:
