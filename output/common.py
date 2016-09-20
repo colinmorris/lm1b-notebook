@@ -5,7 +5,13 @@ import numpy as np
 with open('../char_vocab.json') as f:
   vocab = json.load(f)
 
-META_CHAR_KEYS = ['bos', 'bow', 'eos', 'eow', 'pad']
+META_CHAR_KEYS = {
+  'bos': 'S', 
+  'bow': 'W', 
+  'eos': '/S', 
+  'eow': '/W', 
+  'pad': 'PAD',
+  }
 
 def get_vocab():
   return vocab
@@ -75,7 +81,7 @@ def charify(cp):
   global vocab
   for key in META_CHAR_KEYS:
     if cp == vocab[key]:
-      return '<{}>'.format(key.upper())
+      return '<{}>'.format(META_CHAR_KEYS[key])
   #assert cp not in vocab['free_ids']
   char = chr(cp)
   if cp >= 128 or char not in string.printable:
