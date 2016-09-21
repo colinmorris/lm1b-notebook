@@ -3,6 +3,8 @@ from common import get_embedding, char_type, charify
 from sklearn.neighbors import NearestNeighbors
 import scipy
 
+N_NEIGHBS = 5
+
 
 def analogy(a, b, j, k=3, targ=None):
   """a is to b, as j is to ___
@@ -34,8 +36,8 @@ def nn(vec):
 def an(abj, k=3, target=None):
   return analogy(*abj, k=k, targ=target)
 
-ALLOWED_TYPES = ['digit', 'uppercase', 'lowercase', 'meta', 'punctuation']
-#ALLOWED_TYPES = ['uppercase', 'lowercase']
+#ALLOWED_TYPES = ['digit', 'uppercase', 'lowercase', 'meta', 'punctuation']
+ALLOWED_TYPES = ['uppercase', 'lowercase']
 
 charpoints = [i for i in range(128) if char_type(i) in ALLOWED_TYPES]
 embedding = get_embedding()
@@ -45,7 +47,7 @@ for i in range(10):
   NUM[i] = embedding[ord(str(i))]
 
 X = embedding[charpoints]
-nbrs = NearestNeighbors(n_neighbors=4, algorithm='brute').fit(X)
+nbrs = NearestNeighbors(n_neighbors=N_NEIGHBS+1, algorithm='brute').fit(X)
 distances, indices = nbrs.kneighbors(X)
 
 for i, cp in enumerate(charpoints):

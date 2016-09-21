@@ -31,13 +31,17 @@ COMMON_SPECIAL_CHARS = '.,-\'")(:$?/;&%!'\
 # i.e. there are no used ascii chars that aren't alphanum or punct
 # (whitespace, control characters)
 COLOR_KEY = {
-  'non-ascii': 'fuchsia',
+  'non-ascii': 'violet',
   'digit': 'steelblue',
-  'uppercase': 'limegreen',
-  'lowercase': 'lime',
-  'punctuation': 'khaki',
-  'meta': 'salmon',
-  'other': 'red',
+  'uppercase': 'green', #'limegreen',
+  'lowercase': 'green', #'lime',
+  'punctuation': 'goldenrod', #'khaki', XXX
+  'meta': 'darkred', #'salmon',
+  'whitespace': 'aqua',
+  # unprintable ASCII characters (just control characters I think?)
+  'unprintable': 'violet',
+  'other': 'violet',
+  'unused': 'violet',
 }
 
 def is_frequent(c):
@@ -71,7 +75,15 @@ def char_type(c):
     t = 'punctuation'
   elif any(ord(c) == vocab[k] for k in META_CHAR_KEYS):
     return 'meta'
+  elif ord(c) in vocab['free_ids']:
+    return 'unused'
+  elif c.isspace():
+    return 'whitespace'
+  elif c not in string.printable:
+    return 'unprintable'
   else:
+    # AFAIK this should be unreachable
+    print "Huh? " + str(ord(c))
     t = 'other'
   return t
 
