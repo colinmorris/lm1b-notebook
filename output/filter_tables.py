@@ -5,7 +5,18 @@ import cgi
 import time
 
 MAX_ROWS = 20
-N_WORDS = 1000
+N_WORDS = 15000
+#N_WORDS = 1000
+MAX_FILTERS = 128
+TOPWORDS_PER_COL = 10
+TOPWORD_COLUMNS = 4
+# Don't show weights for characters in positions they can't possibly
+# appear in (e.g. <S> at non-initial position)
+IGNORE_IMPOSSIBLE_WEIGHTS = 1
+PADDING_AMT = 6
+EXCLUDE_RARE = 1
+
+SUBSTR_DEDUPE_N = 4
 
 # TODO: Chars with lowest weights actually aren't really interesting for width-1
 # filters. Any weight less than the bias has the same effect.
@@ -28,19 +39,46 @@ def pprint_char(c):
     return '<BOS>'
   elif ord(c) == VOCAB['eos']:
     return '<EOS>'
+  elif c in '^$_':
+    return '\\' + c
   else:
-    return c
+    return common.charify(c)
 
 def pprint(w):
   cand = ''.join(pprint_char(c) for c in w)
   return cgi.escape(cand)
+
+def intro_boilerplate(width):
+  return """
+<div class="row">
+<div class="intro col-xs-8 col-xs-offset-2">
+<div class="well">
+<p>This page shows visualizations of some width-{} 1-d convolutional filters from Google's <a href="https://github.com/tensorflow/models/tree/master/lm_1b">lm_1b</a> language model. Each pair of columns corresponds to one position in the filter, and shows the characters with the most positive (in green) and negative (red) weights.
+</p>
+<p>Below that are examples of words for which the filter emits the highest values. A filter's response is its maximum value over all substrings it sees in the word. So if a filter has high weights on 'c' in the first position, then 'a', then 't', it will assign equally high scores to 'cat', 'fatcat', 'concatenate', etc. The portion of the string in blue is the substring the filter is responding to.
+</p>
+<p>'^' and '$' represent beginning and end of word markers, respectively. '_' is a padding character. Literal versions of those characters are escaped with a backslash.</p>
+<p>Use the links at the top to see filters of other widths.</p>
+<p>Check out my blog post <a href="/blog/1b-words-filters">here</a> for a bit more context.</p>
+</div>
+</div>
+</div>
+""".format(width)
+
+def nav(curr_width):
+  s = '<ul class="nav nav-pills">'
+  for w in range(1, 8):
+    s += '<li class="{}"><a href="width{}.html">{}</a></li>'.format(
+      "active" if w == curr_width else "", w, w)
+  s += '</ul>'
+  return s
 
 def top_words_html(width, kernel, bias):
   word_score_index = []
   for word in WORDS:
     top_score = 0
     best_idx = 0
-    for start_idx in range(len(word) - width + 1):
+    for start_idx in range(len(word)-PADDING_AMT):
       score = sum(kernel[ord(word[start_idx+offset])][offset]
         for offset in range(width)) + bias
       if score > top_score:
@@ -49,31 +87,68 @@ def top_words_html(width, kernel, bias):
     if top_score > 0:
       word_score_index.append( (word, top_score, best_idx) )
 
+  selectivity = len(word_score_index)/(len(WORDS)+0.0)
+  s = "<p>Non-zero for {:03.1f}% of words.</p>".format(selectivity*100)
   word_score_index.sort(key=lambda wsi: wsi[1], reverse=True)
-  s = '<div class="row"><div class="col-xs-2"><ul class="topwords">'
-  for i in range(20):
-    if len(word_score_index) <= i:
-      break
-    w, score, match_idx = word_score_index[i]
-    s += '<li><span class="topword">'
-    s += pprint(w[:match_idx])
-    s += '<span title="{}" class="ngram-match">{}</span>'.format(
-      ','.join(str(ord(c)) for c in w[match_idx:match_idx+width]),
-      pprint(w[match_idx:match_idx+width]),
-    )
-    s += pprint(w[match_idx+width:])
-    s += '</span><span class="wtopscore">({:.1f})</span>'.format(score)
-    s += '</li>'
-  s += '</ul></div></div>'
+  s += '<div class="row">'
+  i = 0
+  for icol in range(TOPWORD_COLUMNS):
+    s += '<div class="col-xs-3"><ul class="topwords">'
+    col_words = 0
+    last_substr = ''
+    substr_dupes = 0
+    while col_words < TOPWORDS_PER_COL:
+      if len(word_score_index) <= i:
+        break
+      w, score, match_idx = word_score_index[i]
+      i += 1
+      substr = w[match_idx:match_idx+width]
+      if substr == last_substr:
+        substr_dupes += 1
+      else:
+        substr_dupes = 0
+        last_substr = substr
+      if substr_dupes >= SUBSTR_DEDUPE_N:
+        continue
+      s += '<li><span class="topword">'
+      s += pprint(w[:match_idx])
+      s += '<span title="{}" class="ngram-match">{}</span>'.format(
+        ','.join(str(ord(c)) for c in w[:match_idx]) + ' ' +
+        ','.join(str(ord(c)) for c in w[match_idx:match_idx+width]) + ' ' +
+        ','.join(str(ord(c)) for c in w[match_idx+width:])
+        ,
+        pprint(w[match_idx:match_idx+width]),
+      )
+      s += pprint(w[match_idx+width:])
+      s += '</span><span class="wtopscore">({:.1f})</span>'.format(score)
+      s += '</li>'
+      col_words += 1
+    s += '</ul></div>'
+  s += '</div>'
   return s
 
+_initial_posn_only = [
+  VOCAB['bos'], VOCAB['bow'], VOCAB['eos']
+]
+_second_posn_only = [ord(c) for c in '()&!;:?$%']
+def possible(charpoint, posn):
+  return not (
+    (charpoint in _initial_posn_only and posn != 0)
+      or
+    (charpoint in _second_posn_only and posn != 1)
+      or
+    (charpoint == VOCAB['eow'] and posn <= 1)
+      or
+    (charpoint == VOCAB['pad'] and posn <= 2)
+  )
 
 # kernel shape: 256, width
 def filter_html(i, width, kernel, bias):
-  header = '<h2>Filter {} (bias = {:.2f})</h2>'.format(i, bias)
+  header = '<h2 id="filter{}">Filter {} (bias = {:.2f}) <a href="#filter{}">#</a></h2>'.format(i, i, bias, i)
   chars = '<div class="row">'
   for posn in range(width): # TODO: xs-2 won't work for width 7 :/
-    tophits = '''<div class="col-xs-2">
+    mini = width == 7 and posn >= 5
+    tophits = '''<div class="col-xs-1 charcol">
     <table><tbody>
     '''
     posn_weights = kernel[:,posn]
@@ -82,11 +157,13 @@ def filter_html(i, width, kernel, bias):
     bot_meta_idx = 0
     for irow in range(MAX_ROWS):
       topi = sidx[top_meta_idx]
-      while not common.is_frequent(topi):
+      while (EXCLUDE_RARE and not common.is_frequent(topi))\
+          or (IGNORE_IMPOSSIBLE_WEIGHTS and not possible(topi, posn)):
         top_meta_idx -= 1
         topi = sidx[top_meta_idx]
       boti = sidx[bot_meta_idx]
-      while not common.is_frequent(boti):
+      while (EXCLUDE_RARE and not common.is_frequent(boti))\
+          or (IGNORE_IMPOSSIBLE_WEIGHTS and not possible(boti, posn)):
         bot_meta_idx += 1
         boti = sidx[bot_meta_idx]
       if bot_meta_idx > top_meta_idx:
@@ -99,8 +176,8 @@ def filter_html(i, width, kernel, bias):
         <td class="char">{}</td><td class="topscore">{:.2f}</td>
         <td class="char">{}</td><td class="botscore">{:.2f}</td>
       </tr>'''.format(
-        cgi.escape(common.charify(topi)), posn_weights[topi], 
-        cgi.escape(common.charify(boti)), posn_weights[boti])
+        cgi.escape(pprint_char(chr(topi))), posn_weights[topi], 
+        cgi.escape(pprint_char(chr(boti))), posn_weights[boti])
     tophits += '</tbody></table></div>'
     chars += tophits
   chars += '</div>'
@@ -110,13 +187,16 @@ def filter_html(i, width, kernel, bias):
 def n_words(n):
   path = '../data/vocab-2016-09-10.txt'
   f = open(path)
-  words = []
+  words = [
+    chr(VOCAB['bos']) + chr(VOCAB['pad'])*6, 
+    chr(VOCAB['eos']) + chr(VOCAB['pad'])*6,
+  ]
   for _ in range(n):
     w = f.readline()[:-1]
     if w == '<S>':
-      w = chr(VOCAB['bos'])
+      continue
     if w == '</S>':
-      w = chr(VOCAB['eos'])
+      continue
     if w == '<UNK>':
       continue
     words.append( chr(VOCAB['bow']) + w + chr(VOCAB['eow']) + chr(VOCAB['pad'])*4 )
@@ -141,10 +221,16 @@ with open('filter_vis/width{}.html'.format(width), 'w') as f:
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap-theme.min.css" integrity="sha384-rHyoN1iRsVXV4nD0JutlnGaslCJuC7uwjduW9SVrLvRYooPp2bWYgmgJQIXwl/Sp" crossorigin="anonymous">
     
     <link rel="stylesheet" href="./filter.css">
+    <!-- google analytics -->
+    <script>(function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+        (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+          m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+              })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+        ga('create', 'UA-40008549-2', 'auto');
+        ga('send', 'pageview');</script>
   </head>
-  <body>
-  ''')
-  for filter_index in range(kernel.shape[-1]):
+  <body>''' + nav(width) + intro_boilerplate(width))
+  for filter_index in range(min(MAX_FILTERS, kernel.shape[-1])):
     html = filter_html(filter_index, width, kernel[:,:,filter_index], bias[filter_index])
     f.write(html)
   f.write('</body></html>')
