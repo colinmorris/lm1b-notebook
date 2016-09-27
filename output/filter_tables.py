@@ -6,7 +6,7 @@ import time
 
 MAX_ROWS = 20
 N_WORDS = 15000
-#N_WORDS = 1000
+#N_WORDS = 10
 MAX_FILTERS = 128
 TOPWORDS_PER_COL = 10
 TOPWORD_COLUMNS = 4
@@ -15,6 +15,9 @@ TOPWORD_COLUMNS = 4
 IGNORE_IMPOSSIBLE_WEIGHTS = 1
 PADDING_AMT = 6
 EXCLUDE_RARE = 1
+
+# Only show weights at least 5% as positive/negative as the max/min weights
+MIN_WEIGHT_RATIO = .05
 
 SUBSTR_DEDUPE_N = 4
 
@@ -53,14 +56,15 @@ def intro_boilerplate(width):
 <div class="row">
 <div class="intro col-xs-8 col-xs-offset-2">
 <div class="well">
-<p>This page shows visualizations of some width-{} 1-d convolutional filters from Google's <a href="https://github.com/tensorflow/models/tree/master/lm_1b">lm_1b</a> language model. Each pair of columns corresponds to one position in the filter, and shows the characters with the most positive (in green) and negative (red) weights.
+<p>This page shows visualizations of some width-{} 1-d convolutional filters from Google's <a href="https://github.com/tensorflow/models/tree/master/lm_1b">lm_1b</a> language model. Each column corresponds to one position in the filter, and shows the characters with the most positive weights. Use the checkbox in the bottom-right to also see the most negative weights (may be slow).
 </p>
 <p>Below that are examples of words for which the filter emits the highest values. A filter's response is its maximum value over all substrings it sees in the word. So if a filter has high weights on 'c' in the first position, then 'a', then 't', it will assign equally high scores to 'cat', 'fatcat', 'concatenate', etc. The portion of the string in blue is the substring the filter is responding to.
 </p>
 <p>'^' and '$' represent beginning and end of word markers, respectively. '_' is a padding character. Literal versions of those characters are escaped with a backslash.</p>
 <p>Use the links at the top to see filters of other widths.</p>
-<p>Check out my blog post <a href="/blog/1b-words-filters">here</a> for a bit more context.</p>
+<p>Check out my blog post <a href="/blog/1b-words-filters">here</a> for a bit more context, and some pointers to a few interesting filters.</p>
 </div>
+<label id="show-neg-label"><input type="checkbox" id="show-negative">Show most negative weights</label>
 </div>
 </div>
 """.format(width)
@@ -90,7 +94,7 @@ def top_words_html(width, kernel, bias):
   selectivity = len(word_score_index)/(len(WORDS)+0.0)
   s = "<p>Non-zero for {:03.1f}% of words.</p>".format(selectivity*100)
   word_score_index.sort(key=lambda wsi: wsi[1], reverse=True)
-  s += '<div class="row">'
+  s += '<div class="row topwords-row">'
   i = 0
   for icol in range(TOPWORD_COLUMNS):
     s += '<div class="col-xs-3"><ul class="topwords">'
@@ -146,8 +150,9 @@ def possible(charpoint, posn):
 def filter_html(i, width, kernel, bias):
   header = '<h2 id="filter{}">Filter {} (bias = {:.2f}) <a href="#filter{}">#</a></h2>'.format(i, i, bias, i)
   chars = '<div class="row">'
-  for posn in range(width): # TODO: xs-2 won't work for width 7 :/
-    mini = width == 7 and posn >= 5
+  maxweight = np.max(kernel)
+  minweight = np.min(kernel)
+  for posn in range(width): 
     tophits = '''<div class="col-xs-1 charcol">
     <table><tbody>
     '''
@@ -161,6 +166,9 @@ def filter_html(i, width, kernel, bias):
           or (IGNORE_IMPOSSIBLE_WEIGHTS and not possible(topi, posn)):
         top_meta_idx -= 1
         topi = sidx[top_meta_idx]
+      top_weight = posn_weights[topi]
+      show_top = top_weight/maxweight >= MIN_WEIGHT_RATIO
+
       boti = sidx[bot_meta_idx]
       while (EXCLUDE_RARE and not common.is_frequent(boti))\
           or (IGNORE_IMPOSSIBLE_WEIGHTS and not possible(boti, posn)):
@@ -169,15 +177,36 @@ def filter_html(i, width, kernel, bias):
       if bot_meta_idx > top_meta_idx:
         print "WARNING: crossed over"
         break
+      bot_weight = posn_weights[boti]
+      show_bot = bot_weight/minweight >= MIN_WEIGHT_RATIO
+      if not show_top and not show_bot:
+        break
       top_meta_idx -= 1
       bot_meta_idx += 1
 
-      tophits += '''<tr>
-        <td class="char">{}</td><td class="topscore">{:.2f}</td>
-        <td class="char">{}</td><td class="botscore">{:.2f}</td>
-      </tr>'''.format(
-        cgi.escape(pprint_char(chr(topi))), posn_weights[topi], 
-        cgi.escape(pprint_char(chr(boti))), posn_weights[boti])
+      tophits += '<tr>'
+      if show_top:
+        tophits +=\
+        '''<td class="char">{}</td>
+        <td class="topscore">
+          <progress value="{:.2f}" max="{:.2f}" title="{:.2f}"></progress>
+        </td>'''.format(cgi.escape(pprint_char(chr(topi))), 
+          posn_weights[topi], maxweight, posn_weights[topi]
+        )
+      else:
+        tophits += '<td class="char"></td><td class="topscore"></td>'
+
+      if show_bot:
+        tophits +=\
+        '''<td class="botscore char">{}</td>
+        <td class="botscore">
+          <progress value="{:.2f}" max="{:.2f}" title="{:.2f}"></progress>
+        </td>
+      </tr>'''.format(cgi.escape(pprint_char(chr(boti))), 
+        abs(posn_weights[boti]), abs(minweight), posn_weights[boti],
+        )
+      else:
+        tophits += '<td class="botscore char"></td><td class="botscore"></td>'
     tophits += '</tbody></table></div>'
     chars += tophits
   chars += '</div>'
@@ -228,6 +257,20 @@ with open('filter_vis/width{}.html'.format(width), 'w') as f:
               })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
         ga('create', 'UA-40008549-2', 'auto');
         ga('send', 'pageview');</script>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.0/jquery.min.js"></script>
+    <script>
+      $( document ).ready(function() {
+        var showneg = $('#show-negative');
+        if (showneg.is(':checked')) {
+          toggleNegative();
+        }
+        showneg.change(toggleNegative);
+      });
+      function toggleNegative() {
+          $('progress').toggleClass('abbrev');
+          $('.botscore').toggle();
+      }
+    </script>
   </head>
   <body>''' + nav(width) + intro_boilerplate(width))
   for filter_index in range(min(MAX_FILTERS, kernel.shape[-1])):
