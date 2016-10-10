@@ -17,6 +17,7 @@
 """
 import os
 import sys
+import time
 
 import numpy as np
 import tensorflow as tf
@@ -65,6 +66,8 @@ tf.flags.DEFINE_string('input_data', '',
 tf.flags.DEFINE_integer('max_eval_steps', 1000000,
                         'Maximum mumber of steps to run "eval" mode.')
 
+tf.flags.DEFINE_integer('n_top_words', 20, 'Dump the top n next words')
+tf.flags.DEFINE_string('prefix_file', '', 'File containing one prefix per line')
 
 # For saving demo resources, use batch size 1 and step 1.
 BATCH_SIZE = 1
@@ -173,10 +176,125 @@ def _EvalModel(dataset):
     if i > FLAGS.max_eval_steps:
       break
 
+def _SentencePerplexity(dataset_file, vocab):
+  dataset = data_utils.LM1BDataset(dataset_file, vocab)
+  sess, t = _LoadModel(FLAGS.pbtxt, FLAGS.ckpt)
+  current_step = t['global_step'].eval(session=sess)
+  sys.stderr.write('Loaded step %d.\n' % current_step)
+  
+  
+  data_gen = dataset.get_batch(BATCH_SIZE, NUM_TIMESTEPS, forever=False)
+  sys.stderr.write('Loaded data gen\n')
+  total_sum_num = 0.0
+  sum_num = 0.0
+  total_sum_den = 0.0
+  sum_den = 0.0
+  sentence_id = None
+  t0 = time.time()
+  perps = []
+  for i, (inputs, char_inputs, sentence_ids, targets, weights) in enumerate(data_gen):
+    next_sentence_id = sentence_ids[0][0]
+    if sentence_id is None:
+      sentence_id = next_sentence_id
+    # We hit a new sentence. Record this one and reset counters
+    if next_sentence_id != sentence_id:
+      perplexity = np.exp(sum_num / sum_den)
+      print '{}\t{}\t{}'.format(perplexity, sentence_id, '_'.join(str(p) for p in perps))
+      sum_num = sum_den = 0.0
+      perps = []
+      sentence_id = next_sentence_id
+      if (sentence_id % 5) == 0:
+        t1 = time.time()
+        sys.stderr.write('Starting sentence {} (t={:.1f}s)\n'.format(sentence_id, t1-t0))
+        ppx = np.exp(total_sum_num/total_sum_den)
+        sys.stderr.write('Running avg. perplexity: {:.3f}\n'.format(ppx))
+        t0 = t1
+      
+    input_dict = {t['inputs_in']: inputs,
+                  t['targets_in']: targets,
+                  t['target_weights_in']: weights}
+    if 'char_inputs_in' in t:
+      input_dict[t['char_inputs_in']] = char_inputs
+    log_perp = sess.run(t['log_perplexity_out'], feed_dict=input_dict)
+
+    if np.isnan(log_perp):
+      sys.stderr.error('log_perplexity is Nan.\n')
+    else:
+      num = log_perp * weights.mean()
+      sum_num += num
+      total_sum_num += num
+      den = weights.mean()
+      sum_den += den
+      total_sum_den += den
+      perps.append(log_perp)
+
+    if sentence_id > FLAGS.max_eval_steps:
+      break
+  ppx = np.exp(total_sum_num/total_sum_den)
+  print "Final perplexity: {}".format(ppx)
+
+def _DumpNextWords(prefix_file, vocab):
+  # Hack for convenience
+  filemode = prefix_file.endswith('.txt') or ' ' not in prefix_file
+  if filemode:
+    lines = open(prefix_file)
+  else:
+    lines = [prefix_file]
+  sess, t = _LoadModel(FLAGS.pbtxt, FLAGS.ckpt)
+  for line in lines:
+    prefix_words = line.strip()
+    print prefix_words
+    targets = np.zeros([BATCH_SIZE, NUM_TIMESTEPS], np.int32)
+    weights = np.ones([BATCH_SIZE, NUM_TIMESTEPS], np.float32)
+
+    if prefix_words.find('<S>') != 0:
+      prefix_words = '<S> ' + prefix_words
+
+    prefix = [vocab.word_to_id(w) for w in prefix_words.split()]
+    prefix_char_ids = [vocab.word_to_char_ids(w) for w in prefix_words.split()]
+    
+    inputs = np.zeros([BATCH_SIZE, NUM_TIMESTEPS], np.int32)
+    char_ids_inputs = np.zeros(
+        [BATCH_SIZE, NUM_TIMESTEPS, vocab.max_word_length], np.int32)
+    samples = prefix[:]
+    char_ids_samples = prefix_char_ids[:]
+   
+    while True:
+      inputs[0, 0] = samples[0]
+      char_ids_inputs[0, 0, :] = char_ids_samples[0]
+      samples = samples[1:]
+      char_ids_samples = char_ids_samples[1:]
+
+      softmax = sess.run(t['softmax_out'],
+                         feed_dict={t['char_inputs_in']: char_ids_inputs,
+                                    t['inputs_in']: inputs,
+                                    t['targets_in']: targets,
+                                    t['target_weights_in']: weights})
+
+      if not samples:
+        # We're done feeding in the prefix. It's time to get the predicted next words.
+        indices = _SoftmaxTopIndices(softmax[0], FLAGS.n_top_words)
+        for i in indices:
+          print "{}\t{}".format(vocab.id_to_word(i), softmax[0][i])
+        break
+  if filemode:
+    lines.close()
+
+def _SoftmaxTopIndices(softmax, n):
+  top_indices = np.argpartition(softmax, -n)[-n:]
+  top_indices_sorted = top_indices[np.argsort(softmax[top_indices])][::-1]
+  return top_indices_sorted
+  for i in top_indices_sorted:
+    w = vocab.id_to_word(i)
+    p = softmax[i]
+    # TODO: Should probably dump to a file. Also, would probably be nice to be
+    # able to specify multiple prefixes per run. Cause there's a pretty high
+    # overhead on loading the checkpoint data etc.
+    sys.stderr.write('{}\t{}\n'.format(w, p))
+
 
 def _SampleSoftmax(softmax):
   return min(np.sum(np.cumsum(softmax) < np.random.rand()), len(softmax) - 1)
-
 
 def _SampleModel(prefix_words, vocab):
   """Predict next words using the given prefix words.
@@ -215,6 +333,7 @@ def _SampleModel(prefix_words, vocab):
                                     t['targets_in']: targets,
                                     t['target_weights_in']: weights})
 
+      # (This actually isn't necessary if we're still running through the prefix)
       sample = _SampleSoftmax(softmax[0])
       sample_char_ids = vocab.word_to_char_ids(vocab.id_to_word(sample))
 
@@ -360,8 +479,14 @@ def main(unused_argv):
     _DumpEmb(vocab)
   elif FLAGS.mode == 'dump_lstm_emb':
     _DumpSentenceEmbedding(FLAGS.sentence, vocab)
+
+  # (New modes)
   elif FLAGS.mode == 'dump_char_emb':
     _DumpCharEmbedding(vocab)
+  elif FLAGS.mode == 'next_words':
+    _DumpNextWords(FLAGS.prefix_file, vocab)
+  elif FLAGS.mode == 'sentence_perplexity':
+    _SentencePerplexity(FLAGS.input_data, vocab)
   else:
     raise Exception('Mode not supported.')
 

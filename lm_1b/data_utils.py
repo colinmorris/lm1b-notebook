@@ -262,12 +262,15 @@ class LM1BDataset(object):
     ids = [self.vocab.encode(sentence) for sentence in sentences]
 
     global_word_ids = []
-    current_idx = 0
+    current_idx = 1 # Start counting from 1
     for word_ids in ids:
       current_size = len(word_ids) - 1  # without <BOS> symbol
-      cur_ids = np.arange(current_idx, current_idx + current_size)
+      # Hack: Use 'global_word_ids' to hold sentence ids. Didn't seem to be
+      # used anywhere.
+      #cur_ids = np.arange(current_idx, current_idx + current_size)
+      cur_ids = np.ones(current_size) * current_idx
       global_word_ids.append(cur_ids)
-      current_idx += current_size
+      current_idx += 1
 
     tf.logging.info('Loaded %d words.', current_idx)
     tf.logging.info('Finished loading')
